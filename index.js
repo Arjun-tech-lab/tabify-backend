@@ -2,15 +2,41 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import dotenv from "dotenv";
+
+dotenv.config(); // ✅ Load .env variables
 
 const app = express();
-app.use(cors());
+
+// ✅ Read allowed client URLs (comma-separated)
+const allowedOrigins = process.env.CLIENT_URLS
+  ? process.env.CLIENT_URLS.split(",").map((url) => url.trim())
+  : ["*"];
+
+// ✅ Use dynamic CORS
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`❌ CORS blocked for origin: ${origin}`);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    methods: ["GET", "POST"],
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 
 const server = http.createServer(app);
+
+// ✅ Socket.io with same CORS config
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
   },
 });
@@ -22,7 +48,6 @@ let customers = new Map();
 io.on("connection", (socket) => {
   console.log("✅ Client connected:", socket.id);
 
-  // Identify role
   socket.on("registerRole", (role) => {
     if (role === "owner") {
       owners.add(socket.id);
@@ -33,7 +58,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 🧾 Customer places a new order
   socket.on("newOrder", (order) => {
     const newOrder = {
       ...order,
@@ -46,20 +70,17 @@ io.on("connection", (socket) => {
     orders.push(newOrder);
     console.log("📦 New order:", newOrder);
 
-    // Notify all owners
     owners.forEach((ownerId) => {
       io.to(ownerId).emit("newOrder", newOrder);
     });
   });
 
-  // 👑 Owner accepts order
   socket.on("acceptOrder", (orderId) => {
     const order = orders.find((o) => o.id === orderId);
     if (order) {
       order.status = "accepted";
       console.log(`✅ Order accepted: ${orderId}`);
 
-      // Notify all owners
       owners.forEach((ownerId) => {
         io.to(ownerId).emit("orderUpdate", {
           id: order.id,
@@ -68,7 +89,6 @@ io.on("connection", (socket) => {
         });
       });
 
-      // Notify that specific customer
       if (order.customerSocketId) {
         io.to(order.customerSocketId).emit("orderUpdate", {
           id: order.id,
@@ -80,7 +100,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 💳 Customer updates payment status
   socket.on("updatePaymentStatus", ({ orderId, paymentStatus }) => {
     const order = orders.find((o) => o.id === orderId);
     if (order) {
@@ -89,7 +108,6 @@ io.on("connection", (socket) => {
 
       console.log(`💰 Payment updated: ${orderId} → ${paymentStatus}`);
 
-      // Notify all owners
       owners.forEach((ownerId) => {
         io.to(ownerId).emit("orderUpdate", {
           id: order.id,
@@ -98,7 +116,6 @@ io.on("connection", (socket) => {
         });
       });
 
-      // Notify same customer
       if (order.customerSocketId) {
         io.to(order.customerSocketId).emit("orderUpdate", {
           id: order.id,
@@ -109,7 +126,6 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 🔁 When a customer refreshes, reconnect them to their order
   socket.on("reconnectOrder", (orderId) => {
     const order = orders.find((o) => o.id === orderId);
     if (order) {
@@ -134,6 +150,9 @@ app.get("/api/orders/:id", (req, res) => {
   res.json(order);
 });
 
-server.listen(5001, () =>
-  console.log("🚀 Server running on http://localhost:5001")
-);
+// ✅ Use environment PORT (fallback 5001)
+const PORT = process.env.PORT || 5001;
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`🌐 Allowed origins: ${allowedOrigins.join(", ")}`);
+});
