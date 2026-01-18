@@ -3,156 +3,137 @@ import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 import dotenv from "dotenv";
+import mongoose from "mongoose";
 
-dotenv.config(); // ✅ Load .env variables
+import userRoutes from "./routes/user.routes.js";
+import orderRoutes from "./routes/order.route.js";
+import Order from "./models/order.models.js";
+
+// ✅ Load env
+dotenv.config();
+
+// ✅ MongoDB
+mongoose
+  .connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((err) => console.error("❌ MongoDB error:", err));
 
 const app = express();
 
-// ✅ Read allowed client URLs (comma-separated)
+// ✅ CORS
 const allowedOrigins = process.env.CLIENT_URLS
-  ? process.env.CLIENT_URLS.split(",").map((url) => url.trim())
+  ? process.env.CLIENT_URLS.split(",").map((u) => u.trim())
   : ["*"];
 
-// ✅ Use dynamic CORS
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn(`❌ CORS blocked for origin: ${origin}`);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    methods: ["GET", "POST"],
+    origin: allowedOrigins,
     credentials: true,
   })
 );
 
 app.use(express.json());
 
-const server = http.createServer(app);
+// ✅ REST routes
+app.use("/api/users", userRoutes);
+app.use("/api/orders", orderRoutes);
 
-// ✅ Socket.io with same CORS config
+// ✅ Server + Socket
+const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-  },
+  cors: { origin: allowedOrigins },
 });
 
-let orders = [];
-let owners = new Set();
-let customers = new Map();
+// ========================
+// 🔌 SOCKET LOGIC
+// ========================
+const owners = new Set();
 
 io.on("connection", (socket) => {
-  console.log("✅ Client connected:", socket.id);
+  console.log("✅ Connected:", socket.id);
 
   socket.on("registerRole", (role) => {
     if (role === "owner") {
       owners.add(socket.id);
-      console.log(`👑 Owner registered: ${socket.id}`);
-    } else if (role === "customer") {
-      customers.set(socket.id, {});
-      console.log(`🧾 Customer registered: ${socket.id}`);
+      console.log("👑 Owner registered:", socket.id);
     }
   });
 
+  // 🔔 NEW ORDER (notify owners only)
   socket.on("newOrder", (order) => {
-    const newOrder = {
-      ...order,
-      id: order.id || Date.now().toString(),
-      status: "pending",
-      paymentStatus: "unpaid",
-      customerSocketId: socket.id,
-    };
-
-    orders.push(newOrder);
-    console.log("📦 New order:", newOrder);
-
     owners.forEach((ownerId) => {
-      io.to(ownerId).emit("newOrder", newOrder);
+      io.to(ownerId).emit("newOrder", order);
     });
   });
 
-  socket.on("acceptOrder", (orderId) => {
-    const order = orders.find((o) => o.id === orderId);
-    if (order) {
+  // ✅ OWNER ACCEPTS ORDER (FIXED)
+  socket.on("acceptOrder", async (orderId) => {
+    try {
+      const order = await Order.findOne({ _id: orderId });
+
+      if (!order) return;
+
       order.status = "accepted";
-      console.log(`✅ Order accepted: ${orderId}`);
+      await order.save();
 
-      owners.forEach((ownerId) => {
-        io.to(ownerId).emit("orderUpdate", {
-          id: order.id,
-          status: order.status,
-          paymentStatus: order.paymentStatus,
-        });
+      console.log("✅ Order accepted:", orderId);
+
+      // 🔔 Notify customer
+      io.emit("orderUpdate", {
+        id: order._id.toString(),
+        status: order.status,
+        paymentStatus: order.paymentStatus,
       });
-
-      if (order.customerSocketId) {
-        io.to(order.customerSocketId).emit("orderUpdate", {
-          id: order.id,
-          status: order.status,
-          paymentStatus: order.paymentStatus,
-        });
-        console.log(`📢 Sent update to customer: ${order.customerSocketId}`);
-      }
+    } catch (err) {
+      console.error("❌ acceptOrder error:", err);
     }
   });
 
-  socket.on("updatePaymentStatus", ({ orderId, paymentStatus }) => {
-    const order = orders.find((o) => o.id === orderId);
-    if (order) {
+  // 💳 PAYMENT UPDATE (FIXED)
+  socket.on("updatePaymentStatus", async ({ orderId, paymentStatus }) => {
+    try {
+      const order = await Order.findOne({ _id: orderId });
+
+      if (!order) return;
+
       order.paymentStatus = paymentStatus;
-      order.status = paymentStatus === "paid" ? "paid" : order.status;
-
-      console.log(`💰 Payment updated: ${orderId} → ${paymentStatus}`);
-
-      owners.forEach((ownerId) => {
-        io.to(ownerId).emit("orderUpdate", {
-          id: order.id,
-          status: order.status,
-          paymentStatus: order.paymentStatus,
-        });
-      });
-
-      if (order.customerSocketId) {
-        io.to(order.customerSocketId).emit("orderUpdate", {
-          id: order.id,
-          status: order.status,
-          paymentStatus: order.paymentStatus,
-        });
+      if (paymentStatus === "paid") {
+        order.status = "completed";
       }
-    }
-  });
 
-  socket.on("reconnectOrder", (orderId) => {
-    const order = orders.find((o) => o.id === orderId);
-    if (order) {
-      order.customerSocketId = socket.id;
-      console.log(`🔁 Customer reconnected for order ${orderId}: ${socket.id}`);
+      await order.save();
+
+      console.log("💰 Payment updated:", orderId, paymentStatus);
+
+      io.emit("orderUpdate", {
+        id: order._id.toString(),
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+      });
+    } catch (err) {
+      console.error("❌ payment update error:", err);
     }
   });
 
   socket.on("disconnect", () => {
-    console.log("❌ Disconnected:", socket.id);
     owners.delete(socket.id);
-    customers.delete(socket.id);
+    console.log("❌ Disconnected:", socket.id);
   });
 });
 
-// ✅ REST API for refreshing order on page reload
-app.get("/api/orders/:id", (req, res) => {
-  const order = orders.find((o) => o.id === req.params.id);
-  if (!order) {
-    return res.status(404).json({ error: "Order not found" });
+// ✅ FETCH ORDER FROM DB (FIXED)
+app.get("/api/orders/:id", async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: "Not found" });
+    res.json(order);
+  } catch {
+    res.status(500).json({ error: "Server error" });
   }
-  res.json(order);
 });
 
-// ✅ Use environment PORT (fallback 5001)
+// ✅ START SERVER
 const PORT = process.env.PORT || 5001;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`🌐 Allowed origins: ${allowedOrigins.join(", ")}`);
 });
