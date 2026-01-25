@@ -1,11 +1,15 @@
 import mongoose from "mongoose";
-import { v4 as uuidv4 } from "uuid"; // npm install uuid
 
 const userSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  phone: { type: String, required: true },
-  sessionKey: { type: String, unique: true, default: uuidv4 }, // 🔑 Unique session key
-}, { timestamps: true });
+  phone: { type: String, unique: true, required: true },
+  sessionKey: { type: String, required: true },
+  role: {
+    type: String,
+    enum: ["customer", "owner"],
+    default: "customer",
+  },
+});
 
 const User = mongoose.model("User", userSchema);
 export default User;

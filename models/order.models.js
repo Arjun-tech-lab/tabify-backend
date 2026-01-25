@@ -1,17 +1,43 @@
-import mongoose from "mongoose";   // ✅ ADD THIS LINE
+import mongoose from "mongoose";
 
 const orderSchema = new mongoose.Schema(
   {
-    user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-    userName: { type: String, required: true },
-    phone: { type: String, required: true },
-    items: [{ name: String, quantity: Number, price: Number }],
-    totalAmount: Number,
+    // 👤 Customer (ONLY real user)
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    userName: {
+      type: String,
+      required: true,
+    },
+
+    phone: {
+      type: String,
+      required: true,
+    },
+
+    items: [
+      {
+        name: String,
+        quantity: Number,
+        price: Number,
+      },
+    ],
+
+    totalAmount: {
+      type: Number,
+      required: true,
+    },
+
     paymentStatus: {
       type: String,
       enum: ["paid", "unpaid"],
       default: "unpaid",
     },
+
     status: {
       type: String,
       enum: ["requested", "accepted", "completed"],
@@ -23,4 +49,4 @@ const orderSchema = new mongoose.Schema(
 
 const Order = mongoose.model("Order", orderSchema);
 
-export default Order;   // ✅ REQUIRED for ESM
+export default Order;

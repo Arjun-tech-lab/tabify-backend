@@ -1,14 +1,12 @@
 import express from "express";
+import crypto from "crypto";
 import User from "../models/user.models.js";
-import Order from "../models/order.models.js"; // 👈 ADD THIS AT TOP
-
 
 const router = express.Router();
 
-// 🔄 Restore user session + transaction history
 router.post("/register", async (req, res) => {
   try {
-    const { name, phone } = req.body;
+    const { name, phone, role = "customer" } = req.body;
 
     if (!name || !phone) {
       return res.status(400).json({
@@ -17,12 +15,24 @@ router.post("/register", async (req, res) => {
       });
     }
 
+    // 🔒 Allow ONLY ONE owner
+    if (role === "owner") {
+      const existingOwner = await User.findOne({ role: "owner" });
+      if (existingOwner) {
+        return res.status(403).json({
+          success: false,
+          error: "Owner already exists",
+        });
+      }
+    }
+
     let user = await User.findOne({ phone });
 
     if (!user) {
       user = await User.create({
         name,
         phone,
+        role,
         sessionKey: crypto.randomUUID(),
       });
     }
@@ -36,8 +46,5 @@ router.post("/register", async (req, res) => {
     res.status(500).json({ success: false });
   }
 });
-
-
-
 
 export default router;
