@@ -15,37 +15,28 @@ connectDB();
 const app = express();
 
 /* ======================
-   ✅ CORS CONFIG (FIXED)
+   ✅ CORS CONFIG (FINAL)
 ====================== */
 const allowedOrigins = process.env.CLIENT_URLS
   ? process.env.CLIENT_URLS.split(",").map(o => o.trim())
   : [];
 
-if (allowedOrigins.length === 0) {
-  console.warn("⚠️ CLIENT_URLS not set");
-}
-
 const corsOptions = {
-  origin: function (origin, callback) {
-    // allow server-to-server, Postman, curl
-    if (!origin) return callback(null, true);
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // allow Postman, curl
 
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 
-    return callback(
-      new Error(`CORS blocked for origin: ${origin}`)
-    );
+    return callback(new Error("CORS blocked"));
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
 };
 
 app.use(cors(corsOptions));
-app.options("/*", cors(corsOptions)); // 🔥 REQUIRED
-
 app.use(express.json());
 
 /* ======================
@@ -77,43 +68,29 @@ io.on("connection", (socket) => {
   socket.on("registerRole", (role) => {
     if (role === "owner") {
       socket.join("owners");
-      console.log("👑 Owner joined owners room:", socket.id);
     }
   });
 
   socket.on("acceptOrder", async (orderId) => {
-    try {
-      const order = await Order.findById(orderId);
-      if (!order) return;
+    const order = await Order.findById(orderId);
+    if (!order) return;
 
-      order.status = "accepted";
-      await order.save();
-
-      io.emit("orderUpdate", order);
-    } catch (err) {
-      console.error("❌ acceptOrder error:", err);
-    }
+    order.status = "accepted";
+    await order.save();
+    io.emit("orderUpdate", order);
   });
 
   socket.on("updatePaymentStatus", async ({ orderId, paymentStatus }) => {
-    try {
-      if (!orderId || !["paid", "unpaid"].includes(paymentStatus)) return;
+    if (!orderId || !["paid", "unpaid"].includes(paymentStatus)) return;
 
-      const order = await Order.findById(orderId);
-      if (!order) return;
+    const order = await Order.findById(orderId);
+    if (!order) return;
 
-      order.paymentStatus = paymentStatus;
-      if (paymentStatus === "paid") order.status = "completed";
+    order.paymentStatus = paymentStatus;
+    if (paymentStatus === "paid") order.status = "completed";
 
-      await order.save();
-      io.emit("orderUpdate", order);
-    } catch (err) {
-      console.error("❌ payment update error:", err);
-    }
-  });
-
-  socket.on("disconnect", () => {
-    console.log("❌ Disconnected:", socket.id);
+    await order.save();
+    io.emit("orderUpdate", order);
   });
 });
 
@@ -124,3 +101,4 @@ const PORT = process.env.PORT || 5001;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+ 
