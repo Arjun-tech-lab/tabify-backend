@@ -8,16 +8,18 @@ import mongoose from "mongoose";
 import userRoutes from "./routes/user.routes.js";
 import orderRoutes from "./routes/order.route.js";
 import Order from "./models/order.models.js";
+import { connectDB } from "./config/db.js";
 
 dotenv.config();
+connectDB();
+
+
+
 
 // ==================
 // MongoDB
 // ==================
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB error:", err));
+
 
 const app = express();
 
@@ -26,7 +28,11 @@ const app = express();
 // ==================
 const allowedOrigins = process.env.CLIENT_URLS
   ? process.env.CLIENT_URLS.split(",").map((u) => u.trim())
-  : ["*"];
+  : [];
+
+if (allowedOrigins.length === 0) {
+  console.warn("⚠️ CLIENT_URLS not set");
+}
 
 app.use(
   cors({
@@ -55,7 +61,7 @@ const io = new Server(server, {
   },
 });
 
-// 🔥 MAKE IO AVAILABLE TO ROUTES
+// 🔥 MAKE IO AVAILABLE TO ROUTES (IMPORTANT)
 app.set("io", io);
 
 // ==================
@@ -72,7 +78,9 @@ io.on("connection", (socket) => {
     }
   });
 
+  // =============================
   // ✅ OWNER ACCEPTS ORDER
+  // =============================
   socket.on("acceptOrder", async (orderId) => {
     try {
       const order = await Order.findById(orderId);
@@ -81,34 +89,42 @@ io.on("connection", (socket) => {
       order.status = "accepted";
       await order.save();
 
+      // 🔔 ALWAYS emit FULL order
       io.emit("orderUpdate", order);
 
+      console.log("✅ Order accepted:", order._id);
     } catch (err) {
       console.error("❌ acceptOrder error:", err);
     }
   });
 
+  // =============================
   // 💳 PAYMENT UPDATE
-  socket.on(
-    "updatePaymentStatus",
-    async ({ orderId, paymentStatus }) => {
-      try {
-        const order = await Order.findById(orderId);
-        if (!order) return;
-
-        order.paymentStatus = paymentStatus;
-        if (paymentStatus === "paid") {
-          order.status = "completed";
-        }
-
-        await order.save();
-
-        io.emit("orderUpdate", order);
-      } catch (err) {
-        console.error("❌ payment update error:", err);
-      }
+  // =============================
+ socket.on("updatePaymentStatus", async ({ orderId, paymentStatus }) => {
+  try {
+    if (
+      !orderId ||
+      !["paid", "unpaid"].includes(paymentStatus)
+    ) {
+      return;
     }
-  );
+
+    const order = await Order.findById(orderId);
+    if (!order) return;
+
+    order.paymentStatus = paymentStatus;
+    if (paymentStatus === "paid") {
+      order.status = "completed";
+    }
+
+    await order.save();
+    io.emit("orderUpdate", order);
+  } catch (err) {
+    console.error("❌ payment update error:", err);
+  }
+});
+
 
   socket.on("disconnect", () => {
     console.log("❌ Disconnected:", socket.id);

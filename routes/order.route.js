@@ -3,6 +3,13 @@ import Order from "../models/order.models.js";
 import User from "../models/user.models.js";
 
 const router = express.Router();
+const getPagination = (req) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.max(1, parseInt(req.query.limit) || 10);
+  const skip = (page - 1) * limit;
+  return { page, limit, skip };
+};
+
 
 // ===============================
 // 🧾 CREATE ORDER (Customer ONLY)
@@ -52,61 +59,162 @@ router.post("/create", async (req, res) => {
 // ===============================
 // 🧾 CUSTOMER: GET MY ORDERS
 // ===============================
+// ===============================
+// 🧾 CUSTOMER: GET MY ORDERS (PAGINATED)
+// ===============================
 router.get("/my", async (req, res) => {
   try {
-    const sessionKey = req.headers.authorization;
+    const auth = req.headers.authorization;
 
-    if (!sessionKey) {
+    if (!auth || !auth.startsWith("Bearer ")) {
       return res.status(401).json({
         success: false,
-        message: "No session key",
+        message: "Missing authorization",
       });
     }
 
-    const customer = await User.findOne({ sessionKey });
-    if (!customer) {
+    const sessionKey = auth.split(" ")[1];
+
+    const user = await User.findOne({ sessionKey });
+    if (!user) {
       return res.status(401).json({
         success: false,
         message: "Invalid session",
       });
     }
 
-    const orders = await Order.find({
-      user: customer._id,
-    }).sort({ createdAt: -1 });
+    // ✅ pagination params
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit) || 5);
+    const skip = (page - 1) * limit;
 
-    res.status(200).json({
+    const [orders, total] = await Promise.all([
+      Order.find({ user: user._id })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Order.countDocuments({ user: user._id }),
+    ]);
+
+    res.json({
       success: true,
       orders,
+      pagination: {
+        page,
+        limit,
+        totalRecords: total,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page * limit < total,
+        hasPrevPage: page > 1,
+      },
     });
   } catch (err) {
-    console.error("❌ Customer history error:", err);
+    console.error("My orders pagination error:", err);
     res.status(500).json({
       success: false,
       message: "Server error",
     });
   }
 });
+
 
 // ===============================
 // 👑 OWNER: GET ALL ORDERS (HISTORY)
 // ===============================
+// 👑 OWNER: ALL ORDERS (PAGINATED)
 router.get("/all", async (req, res) => {
   try {
-    const orders = await Order.find()
-      .sort({ createdAt: -1 });
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const [orders, total] = await Promise.all([
+      Order.find()
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Order.countDocuments(),
+    ]);
+
+    res.json({
+      success: true,
+      orders,
+      pagination: {
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        totalRecords: total,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false });
+  }
+});
+
+// 💰 PAID ORDERS (PAGINATED)
+router.get("/paid", async (req, res) => {
+  const page = Number(req.query.page) || 1;
+  const limit = Number(req.query.limit) || 10;
+  const skip = (page - 1) * limit;
+
+  const [orders, total] = await Promise.all([
+    Order.find({ paymentStatus: "paid" })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    Order.countDocuments({ paymentStatus: "paid" }),
+  ]);
+
+  res.json({
+    success: true,
+    orders,
+    pagination: {
+      page,
+      totalPages: Math.ceil(total / limit),
+    },
+  });
+});
+
+// 🧾 UNPAID ORDERS (PAGINATED)
+
+
+router.get("/unpaid", async (req, res) => {
+  try {
+    const { page, limit, skip } = getPagination(req);
+
+    const filter = { paymentStatus: "unpaid" };
+
+    const [orders, total] = await Promise.all([
+      Order.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(), // ⚡ performance boost
+      Order.countDocuments(filter),
+    ]);
 
     res.status(200).json({
       success: true,
       orders,
+      pagination: {
+        page,
+        limit,
+        totalRecords: total,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page * limit < total,
+        hasPrevPage: page > 1,
+      },
     });
   } catch (err) {
-    console.error("❌ Owner history error:", err);
+    console.error("❌ unpaid pagination error:", err);
     res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Failed to fetch unpaid orders",
     });
   }
 });
+
+
+
 
 export default router;
