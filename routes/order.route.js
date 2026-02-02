@@ -83,17 +83,20 @@ router.get("/my", async (req, res) => {
       });
     }
 
-    // ✅ pagination params
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit) || 5);
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 5;
     const skip = (page - 1) * limit;
 
+    // ✅ CRITICAL FIX: filter by user
+    const filter = { user: user._id };
+
     const [orders, total] = await Promise.all([
-      Order.find({ user: user._id })
+      Order.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
-      Order.countDocuments({ user: user._id }),
+
+      Order.countDocuments(filter),
     ]);
 
     res.json({
@@ -101,21 +104,131 @@ router.get("/my", async (req, res) => {
       orders,
       pagination: {
         page,
-        limit,
-        totalRecords: total,
         totalPages: Math.ceil(total / limit),
-        hasNextPage: page * limit < total,
-        hasPrevPage: page > 1,
       },
     });
   } catch (err) {
-    console.error("My orders pagination error:", err);
+    console.error("My orders error:", err);
     res.status(500).json({
       success: false,
       message: "Server error",
     });
   }
 });
+
+
+
+//balance  with search 
+
+router.get("/balances", async (req, res) => {
+  try {
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const search = req.query.search?.trim();
+
+    const matchStage = {
+      paymentStatus: "unpaid"
+    };
+
+    const basePipeline = [
+      { $match: matchStage },
+      {
+        $group: {
+          _id: "$user",
+          userName: { $first: "$userName" },
+          phone: { $first: "$phone" },
+          totalDue: { $sum: "$totalAmount" },
+          lastOrderAt: { $max: "$createdAt" }
+        }
+      }
+    ];
+
+    // 🔍 SEARCH by name (case-insensitive)
+    if (search) {
+      basePipeline.push({
+        $match: {
+          userName: { $regex: search, $options: "i" }
+        }
+      });
+    }
+
+    // 🔢 count after grouping + search
+    const countResult = await Order.aggregate([
+      ...basePipeline,
+      { $count: "count" }
+    ]);
+
+    const totalCustomers = countResult[0]?.count || 0;
+
+    const balances = await Order.aggregate([
+      ...basePipeline,
+      { $sort: { lastOrderAt: -1 } },
+      { $skip: skip },
+      { $limit: limit }
+    ]);
+
+    res.json({
+      success: true,
+      balances,
+      pagination: {
+        page,
+        limit,
+        totalPages: Math.ceil(totalCustomers / limit),
+        totalCustomers
+      }
+    });
+  } catch (err) {
+    console.error("Balance search error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch balances"
+    });
+  }
+});
+// ===============================
+// 💰 OWNER: MARK CUSTOMER BALANCE AS PAID
+// ===============================
+router.post("/balances/mark-paid", async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "userId is required"
+      });
+    }
+
+    const result = await Order.updateMany(
+      {
+        user: userId,
+        paymentStatus: "unpaid"
+      },
+      {
+        $set: { paymentStatus: "paid" }
+      }
+    );
+
+    // 🔔 Optional: notify owners via socket
+    const io = req.app.get("io");
+    if (io) {
+      io.to("owners").emit("balancePaid", { userId });
+    }
+
+    res.json({
+      success: true,
+      updatedOrders: result.modifiedCount
+    });
+  } catch (err) {
+    console.error("Mark balance paid error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark balance as paid"
+    });
+  }
+});
+
 
 
 // ===============================
