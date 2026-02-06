@@ -12,6 +12,92 @@ const getPagination = (req) => {
 
 
 // ===============================
+// 👑 OWNER: LIVE REQUESTS
+// ===============================
+router.get("/live", async (req, res) => {
+  try {
+    const orders = await Order.find({ status: "requested" })
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      orders,
+    });
+  } catch (err) {
+    console.error("Live orders fetch error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch live requests",
+    });
+  }
+});
+
+// ===============================
+// 📒 OWNER: CUSTOMER LEDGER (OKCREDIT STYLE)
+// ===============================
+router.get("/ledger/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId).lean();
+    if (!user) {
+      return res.status(404).json({ success: false });
+    }
+
+    // IMPORTANT: oldest → newest
+    const orders = await Order.find({ user: userId })
+      .sort({ createdAt: 1 })
+      .lean();
+
+    let balance = 0;
+
+    const ledger = orders.map((order) => {
+      const amount = Number(order.totalAmount || 0); // ✅ force number
+
+      if (order.paymentStatus === "paid") {
+        // 💰 PAYMENT RECEIVED
+        balance -= amount;
+
+        return {
+          type: "payment",
+          description: "Payment received",
+          amount: -amount, // ✅ NEGATIVE
+          date: order.updatedAt || order.createdAt,
+          balanceAfter: balance,
+        };
+      } else {
+        // 🧾 ORDER PLACED
+        balance += amount;
+
+        return {
+          type: "order",
+          description: "Order placed",
+          amount: amount, // ✅ POSITIVE
+          date: order.createdAt,
+          balanceAfter: balance,
+        };
+      }
+    });
+
+    res.json({
+      success: true,
+      customer: {
+        name: user.name,
+        phone: user.phone,
+      },
+      ledger,
+      balance,
+    });
+  } catch (err) {
+    console.error("Ledger fetch error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch ledger",
+    });
+  }
+});
+
+// ===============================
 // 🧾 CREATE ORDER (Customer ONLY)
 // ===============================
 router.post("/create", async (req, res) => {
